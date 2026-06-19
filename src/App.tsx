@@ -1,11 +1,14 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { MARKETS } from './data/markets';
-import { useVotes } from './hooks/useVotes';
+import { useVotes, type CastOutcome } from './hooks/useVotes';
+import { getVoterName, saveVoterName } from './lib/fingerprint';
 import { Hero } from './components/Hero';
 import { LiveTicker } from './components/LiveTicker';
 import { MarketCard } from './components/MarketCard';
 import { MarketSummary } from './components/MarketSummary';
 import { BallotReceipt } from './components/BallotReceipt';
+import { NamePrompt } from './components/NamePrompt';
+import { VotersStrip } from './components/VotersStrip';
 import { EmergencyOverride } from './components/EmergencyOverride';
 import { Pill } from './components/Pill';
 
@@ -85,9 +88,16 @@ function Footer() {
 export default function App() {
   const votes = useVotes();
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [voterName, setVoterName] = useState<string | null>(() => getVoterName());
+  const [nameModalOpen, setNameModalOpen] = useState(false);
+  const pendingVote = useRef<{
+    pollId: string;
+    optionId: string;
+    resolve: (outcome: CastOutcome) => void;
+  } | null>(null);
 
-  const handleVote = useCallback(
-    async (pollId: string, optionId: string) => {
+  const doVote = useCallback(
+    async (pollId: string, optionId: string): Promise<CastOutcome> => {
       const outcome = await votes.castVote(pollId, optionId);
       if (outcome.firstEntry && outcome.result === 'ok') {
         setReceiptOpen(true);
@@ -96,6 +106,51 @@ export default function App() {
     },
     [votes],
   );
+
+  // First-time voters name themselves before their ballot is cast. The pending
+  // pick is held until they submit (or dismissed if they back out).
+  const handleVote = useCallback(
+    (pollId: string, optionId: string): Promise<CastOutcome> => {
+      if (!getVoterName()) {
+        return new Promise<CastOutcome>((resolve) => {
+          pendingVote.current = { pollId, optionId, resolve };
+          setNameModalOpen(true);
+        });
+      }
+      return doVote(pollId, optionId);
+    },
+    [doVote],
+  );
+
+  const submitName = useCallback(
+    (name: string) => {
+      const clean = saveVoterName(name);
+      setVoterName(clean);
+      setNameModalOpen(false);
+      const pending = pendingVote.current;
+      pendingVote.current = null;
+      if (!pending) return;
+      const { pollId, optionId, resolve } = pending;
+      // Always resolve the deferred pick so the market card can't hang — even if
+      // the vote errors, its own errored state drives the inline retry banner.
+      void (async () => {
+        try {
+          resolve(await doVote(pollId, optionId));
+        } catch {
+          resolve({ result: 'duplicate', firstEntry: false, cancelled: true });
+        }
+      })();
+    },
+    [doVote],
+  );
+
+  const cancelName = useCallback(() => {
+    setNameModalOpen(false);
+    const pending = pendingVote.current;
+    pendingVote.current = null;
+    // Resolve the deferred pick as a no-op so the market card re-enables.
+    pending?.resolve({ result: 'duplicate', firstEntry: false, cancelled: true });
+  }, []);
 
   const closeReceipt = useCallback(() => {
     setReceiptOpen(false);
@@ -113,6 +168,7 @@ export default function App() {
       <Hero />
       <LiveTicker />
       <ExchangeStatus total={votes.totalVotes} demo={votes.mode === 'demo'} />
+      <VotersStrip voters={votes.voters} you={voterName} />
 
       <main id="live-board" className="flex scroll-mt-3 flex-col gap-4 sm:gap-5">
         {votes.loadState === 'error' ? (
@@ -141,6 +197,7 @@ export default function App() {
       <EmergencyOverride />
       <Footer />
 
+      <NamePrompt open={nameModalOpen} onSubmit={submitName} onClose={cancelName} />
       <BallotReceipt open={receiptOpen} onClose={closeReceipt} />
     </div>
   );

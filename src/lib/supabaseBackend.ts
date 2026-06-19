@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { CastResult, VoteBackend } from '../types';
 import { emptyCounts } from './counts';
+import { dedupeNames } from './fingerprint';
 
 /**
  * Live backend backed by Supabase + Supabase Realtime.
@@ -10,6 +11,20 @@ import { emptyCounts } from './counts';
  * ever went viral you'd swap fetchCounts() for a SQL aggregate / materialized
  * view — but the rest of the app wouldn't need to change.
  */
+
+/**
+ * True when an error just means the `voter_name` column hasn't been added yet
+ * (i.e. the database predates the roster feature). Lets us degrade gracefully
+ * to nameless votes instead of failing the ballot.
+ */
+function isMissingVoterName(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === 'PGRST204' ||
+    error.code === '42703' ||
+    /voter_name/i.test(error.message ?? '')
+  );
+}
+
 export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
   // Track ids of votes WE inserted so we can ignore their realtime echo and
   // avoid double-counting (the UI already applied them optimistically).
@@ -31,16 +46,43 @@ export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
       return counts;
     },
 
-    async castVote(pollId, optionId, fingerprint): Promise<CastResult> {
+    async fetchVoters() {
       const { data, error } = await client
         .from('votes')
-        .insert({
-          poll_id: pollId,
-          option_id: optionId,
-          voter_fingerprint: fingerprint,
-        })
+        .select('voter_name, created_at')
+        .not('voter_name', 'is', null)
+        .order('created_at', { ascending: true });
+      if (error) {
+        // Column not added yet (pre-migration) — just show an empty roster.
+        if (isMissingVoterName(error)) return [];
+        throw error;
+      }
+      return dedupeNames((data ?? []).map((r) => String(r.voter_name)));
+    },
+
+    async castVote(pollId, optionId, fingerprint, voterName): Promise<CastResult> {
+      const base = {
+        poll_id: pollId,
+        option_id: optionId,
+        voter_fingerprint: fingerprint,
+      };
+      const payload = voterName ? { ...base, voter_name: voterName } : base;
+
+      let { data, error } = await client
+        .from('votes')
+        .insert(payload)
         .select('id')
         .single();
+
+      // If the DB hasn't had `voter_name` added yet, don't fail the vote — retry
+      // without the name so voting keeps working until the migration is run.
+      if (error && voterName && isMissingVoterName(error)) {
+        ({ data, error } = await client
+          .from('votes')
+          .insert(base)
+          .select('id')
+          .single());
+      }
 
       if (error) {
         // 23505 = unique_violation -> this fingerprint already voted this poll.
@@ -62,6 +104,7 @@ export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
               id?: string;
               poll_id?: string;
               option_id?: string;
+              voter_name?: string | null;
             };
             const id = row.id ? String(row.id) : '';
             // Skip the echo of our own inserts (already counted optimistically).
@@ -70,7 +113,7 @@ export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
               return;
             }
             if (row.poll_id && row.option_id) {
-              onVote(row.poll_id, row.option_id);
+              onVote(row.poll_id, row.option_id, row.voter_name ?? undefined);
             }
           },
         )

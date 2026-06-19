@@ -61,6 +61,28 @@ const SEED_WEIGHTS: Record<string, number> = {
   'mrs-stephens-fumbles': 8,
 };
 
+// Imaginary group-chat members who populate the demo roster + simulated feed.
+const DEMO_VOTERS = [
+  'Maya',
+  'Jordan',
+  'Priya',
+  'Chris',
+  'Tasha',
+  'Devin',
+  'Bri',
+  'Marcus',
+  'Sam',
+  'Noor',
+  'Hannah B.',
+  'Kev',
+  "Linley's roommate",
+  'Andrew (other one)',
+  'Reese',
+  'Tariq',
+  'Court',
+  'Jules',
+];
+
 function seededCounts(): VoteCounts {
   const counts = emptyCounts();
   for (const poll of MARKETS) {
@@ -93,7 +115,10 @@ function weightedRandomOption(pollId: string): string {
 
 export function createMockBackend(): VoteBackend {
   const counts = seededCounts();
-  const subscribers = new Set<(pollId: string, optionId: string) => void>();
+  // Start with a lively roster; the drip feed brings more faces over time.
+  const voters: string[] = DEMO_VOTERS.slice(0, 9);
+  let nextDemoVoter = voters.length;
+  const subscribers = new Set<(pollId: string, optionId: string, voterName?: string) => void>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   // Drip a vote from an imaginary group member, then schedule the next at a
@@ -104,7 +129,15 @@ export function createMockBackend(): VoteBackend {
       const poll = MARKETS[Math.floor(Math.random() * MARKETS.length)];
       const optionId = weightedRandomOption(poll.id);
       counts[poll.id][optionId] += 1;
-      subscribers.forEach((cb) => cb(poll.id, optionId));
+
+      // Every so often a new face enters the market.
+      let name: string | undefined;
+      if (nextDemoVoter < DEMO_VOTERS.length && Math.random() < 0.4) {
+        name = DEMO_VOTERS[nextDemoVoter++];
+        voters.push(name);
+      }
+
+      subscribers.forEach((cb) => cb(poll.id, optionId, name));
       scheduleDrip();
     }, delay);
   }
@@ -118,9 +151,17 @@ export function createMockBackend(): VoteBackend {
       return deepCopy(counts);
     },
 
-    async castVote(pollId, optionId) {
+    async fetchVoters() {
+      await new Promise((r) => setTimeout(r, 280));
+      return [...voters];
+    },
+
+    async castVote(pollId, optionId, _fingerprint, voterName) {
       await new Promise((r) => setTimeout(r, 220));
       counts[pollId][optionId] += 1; // keep internal state truthful
+      if (voterName && !voters.some((n) => n.toLowerCase() === voterName.toLowerCase())) {
+        voters.push(voterName);
+      }
       return 'ok';
     },
 

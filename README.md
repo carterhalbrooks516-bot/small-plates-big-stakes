@@ -114,6 +114,7 @@ create table if not exists votes (
   poll_id           text not null references polls (id) on delete cascade,
   option_id         text not null references options (id) on delete cascade,
   voter_fingerprint text not null,
+  voter_name        text,           -- public display name for the "who's in the market" roster
   created_at        timestamptz not null default now(),
   -- One vote per device fingerprint per market (casual duplicate guard).
   constraint votes_one_per_poll unique (poll_id, voter_fingerprint)
@@ -143,6 +144,13 @@ alter publication supabase_realtime add table votes;
 > If you ever need to reset, `alter publication supabase_realtime drop table votes;`
 > removes it from the realtime stream. You can also toggle realtime per-table
 > under **Database → Replication** in the dashboard.
+
+> **Upgrading an existing database?** If your tables predate the "who's in the
+> market" roster, add the column once (existing rows simply keep a blank name):
+>
+> ```sql
+> alter table votes add column if not exists voter_name text;
+> ```
 
 ### 4. Seed the markets
 

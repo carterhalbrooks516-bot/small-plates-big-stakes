@@ -81,3 +81,59 @@ export function markEntered(): void {
     /* ignore */
   }
 }
+
+/* ── Voter display name ("who's in the market") ──────────────────────────────
+ * The public name attached to each ballot. Stored locally so a voter is asked
+ * only once, then reused for every market they enter.
+ */
+
+const VOTER_NAME_KEY = 'small-plates-voter-name';
+
+/** Longest display name we keep (keeps the roster tidy). */
+export const MAX_NAME_LEN = 24;
+
+/** Tidy a raw name: collapse whitespace, trim, and cap the length. */
+export function cleanName(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LEN);
+}
+
+/** The display name this device chose, or null if they haven't entered yet. */
+export function getVoterName(): string | null {
+  try {
+    const name = localStorage.getItem(VOTER_NAME_KEY);
+    return name && name.trim() ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist a cleaned display name and return the stored value. */
+export function saveVoterName(name: string): string {
+  const clean = cleanName(name);
+  try {
+    localStorage.setItem(VOTER_NAME_KEY, clean);
+  } catch {
+    /* ignore */
+  }
+  return clean;
+}
+
+/** Case-insensitive de-dupe that preserves first-seen order. */
+export function dedupeNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of names) {
+    const key = name.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
+/** Append `name` to `list` unless an equal (case-insensitive) name is present. */
+export function mergeName(list: string[], name: string): string[] {
+  const key = name.trim().toLowerCase();
+  if (!key || list.some((n) => n.trim().toLowerCase() === key)) return list;
+  return [...list, name];
+}

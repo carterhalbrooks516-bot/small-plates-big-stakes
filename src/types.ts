@@ -42,15 +42,26 @@ export interface VoteBackend {
   readonly mode: DataMode;
   /** Pull current totals for every option. */
   fetchCounts(): Promise<VoteCounts>;
+  /** Display names of everyone who has cast a ballot ("who's in the market"). */
+  fetchVoters(): Promise<string[]>;
   /**
    * Record a vote. Resolves 'ok' when stored, 'duplicate' when the database
    * already has a vote from this fingerprint. Throws on real network errors.
+   * `voterName` is the public display name attached to the ballot.
    */
-  castVote(pollId: string, optionId: string, fingerprint: string): Promise<CastResult>;
+  castVote(
+    pollId: string,
+    optionId: string,
+    fingerprint: string,
+    voterName?: string,
+  ): Promise<CastResult>;
   /**
    * Subscribe to votes arriving from OTHER clients. Returns an unsubscribe
-   * function. The callback fires once per incoming vote — a client's own votes
-   * are deduped so the UI can apply them optimistically without double-counting.
+   * function. The callback fires once per incoming vote (with the voter's name
+   * when present) — a client's own votes are deduped so the UI can apply them
+   * optimistically without double-counting.
    */
-  subscribe(onVote: (pollId: string, optionId: string) => void): () => void;
+  subscribe(
+    onVote: (pollId: string, optionId: string, voterName?: string) => void,
+  ): () => void;
 }
