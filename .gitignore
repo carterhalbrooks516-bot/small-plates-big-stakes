@@ -34,3 +34,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# OG image generator font cache (downloaded on demand)
+scripts/.og-fonts/
