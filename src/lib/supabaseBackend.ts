@@ -1,15 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { CastResult, VoteBackend } from '../types';
+import type { CastResult, VoteBackend, VoteSnapshot } from '../types';
 import { emptyCounts } from './counts';
 import { dedupeNames } from './fingerprint';
 
 /**
  * Live backend backed by Supabase + Supabase Realtime.
  *
- * Counts are computed client-side from the `votes` table. For a group-chat-sized
- * audience (dozens–hundreds of votes) this is simple and plenty fast. If this
- * ever went viral you'd swap fetchCounts() for a SQL aggregate / materialized
- * view — but the rest of the app wouldn't need to change.
+ * Counts, the roster, and per-voter ballot progress are all computed client-side
+ * from the `votes` table. For a group-chat-sized audience (dozens–hundreds of
+ * votes) this is simple and plenty fast. If this ever went viral you'd swap the
+ * snapshot for a SQL aggregate — but the rest of the app wouldn't need to change.
  */
 
 /**
@@ -33,31 +33,43 @@ export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
   return {
     mode: 'live',
 
-    async fetchCounts() {
-      const counts = emptyCounts();
-      const { data, error } = await client.from('votes').select('poll_id, option_id');
-      if (error) throw error;
-      for (const row of data ?? []) {
-        const poll = counts[row.poll_id as string];
-        if (poll && poll[row.option_id as string] !== undefined) {
-          poll[row.option_id as string] += 1;
-        }
-      }
-      return counts;
-    },
+    async fetchSnapshot(): Promise<VoteSnapshot> {
+      type Row = {
+        poll_id: string;
+        option_id: string;
+        voter_fingerprint?: string | null;
+        voter_name?: string | null;
+      };
 
-    async fetchVoters() {
-      const { data, error } = await client
+      // One pass over the table builds counts, the roster, and per-voter progress.
+      const primary = await client
         .from('votes')
-        .select('voter_name, created_at')
-        .not('voter_name', 'is', null)
+        .select('poll_id, option_id, voter_fingerprint, voter_name')
         .order('created_at', { ascending: true });
-      if (error) {
-        // Column not added yet (pre-migration) — just show an empty roster.
-        if (isMissingVoterName(error)) return [];
-        throw error;
+
+      let data = primary.data as Row[] | null;
+      let error = primary.error;
+      if (error && isMissingVoterName(error)) {
+        // Older database without the voter_name column — fetch without it.
+        const fallback = await client
+          .from('votes')
+          .select('poll_id, option_id, voter_fingerprint')
+          .order('created_at', { ascending: true });
+        data = fallback.data as Row[] | null;
+        error = fallback.error;
       }
-      return dedupeNames((data ?? []).map((r) => String(r.voter_name)));
+      if (error) throw error;
+
+      const counts = emptyCounts();
+      const progress: Record<string, string[]> = {};
+      const names: string[] = [];
+      for (const row of data ?? []) {
+        const poll = counts[row.poll_id];
+        if (poll && poll[row.option_id] !== undefined) poll[row.option_id] += 1;
+        if (row.voter_fingerprint) (progress[row.voter_fingerprint] ??= []).push(row.poll_id);
+        if (row.voter_name) names.push(row.voter_name);
+      }
+      return { counts, voters: dedupeNames(names), ballotProgress: progress };
     },
 
     async castVote(pollId, optionId, fingerprint, voterName): Promise<CastResult> {
@@ -105,6 +117,7 @@ export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
               poll_id?: string;
               option_id?: string;
               voter_name?: string | null;
+              voter_fingerprint?: string | null;
             };
             const id = row.id ? String(row.id) : '';
             // Skip the echo of our own inserts (already counted optimistically).
@@ -113,7 +126,12 @@ export function createSupabaseBackend(client: SupabaseClient): VoteBackend {
               return;
             }
             if (row.poll_id && row.option_id) {
-              onVote(row.poll_id, row.option_id, row.voter_name ?? undefined);
+              onVote(
+                row.poll_id,
+                row.option_id,
+                row.voter_name ?? undefined,
+                row.voter_fingerprint ?? undefined,
+              );
             }
           },
         )

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { MatchupLine } from '../lib/odds';
 import { Avatar } from './Avatar';
 import { LinleyAvatar } from './avatars/LinleyAvatar';
 import { AndrewAvatar } from './avatars/AndrewAvatar';
@@ -43,7 +44,7 @@ function Contender({
   );
 }
 
-export function Hero() {
+export function Hero({ matchup }: { matchup: MatchupLine }) {
   return (
     <header className="glass-card relative overflow-hidden px-4 pb-6 pt-5 sm:px-7 sm:pb-8 sm:pt-6">
       {/* Warm tapas-bar ambiance: candle glow + faint scattered props */}
@@ -95,8 +96,8 @@ export function Hero() {
         <div className="flex items-start justify-center gap-2 sm:gap-5">
           <Contender
             name="Linley"
-            tag="The Favorite"
-            moneyline="−165"
+            tag={matchup.favorite === 'linley' ? 'The Favorite' : 'The Underdog'}
+            moneyline={matchup.linleyMoneyline}
             glow="rgba(16,164,114,0.55)"
           >
             <Avatar imageSrc="assets/linley-avatar.png" alt="Linley" className="h-full w-full">
@@ -112,8 +113,8 @@ export function Hero() {
 
           <Contender
             name="Andrew"
-            tag="The Underdog"
-            moneyline="+220"
+            tag={matchup.favorite === 'andrew' ? 'The Favorite' : 'The Underdog'}
+            moneyline={matchup.andrewMoneyline}
             glow="rgba(192,57,43,0.55)"
           >
             <Avatar imageSrc="assets/andrew-avatar.png" alt="Andrew" className="h-full w-full">
@@ -121,6 +122,11 @@ export function Hero() {
             </Avatar>
           </Contender>
         </div>
+
+        {/* Live odds caption */}
+        <p className="mt-4 text-center font-cond text-[0.58rem] uppercase tracking-[0.22em] text-cream-dim/80">
+          Live odds · they move with every ballot
+        </p>
 
         {/* Venue line */}
         <div className="mt-6 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center">

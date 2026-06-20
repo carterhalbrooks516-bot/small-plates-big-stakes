@@ -1,4 +1,4 @@
-import type { VoteBackend, VoteCounts } from '../types';
+import type { VoteBackend, VoteCounts, VoteSnapshot } from '../types';
 import { MARKETS } from '../data/markets';
 import { emptyCounts } from './counts';
 
@@ -118,7 +118,22 @@ export function createMockBackend(): VoteBackend {
   // Start with a lively roster; the drip feed brings more faces over time.
   const voters: string[] = DEMO_VOTERS.slice(0, 9);
   let nextDemoVoter = voters.length;
-  const subscribers = new Set<(pollId: string, optionId: string, voterName?: string) => void>();
+
+  // Per-voter ballot progress for the "completed ballots" stat: seed a believable
+  // mix of finished and in-progress ballots, then let the drip advance them.
+  const allPolls = MARKETS.map((m) => m.id);
+  const progress = new Map<string, Set<string>>();
+  for (let i = 0; i < 8; i++) progress.set(`demo-done-${i}`, new Set(allPolls)); // 8 completed
+  const liveFps = ['demo-live-1', 'demo-live-2', 'demo-live-3', 'demo-live-4'];
+  for (const fp of liveFps) {
+    const n = 1 + Math.floor(Math.random() * 4); // 1..4 answered so far
+    progress.set(fp, new Set(allPolls.slice(0, n)));
+  }
+  let liveIdx = 0;
+
+  const subscribers = new Set<
+    (pollId: string, optionId: string, voterName?: string, fingerprint?: string) => void
+  >();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   // Drip a vote from an imaginary group member, then schedule the next at a
@@ -132,12 +147,22 @@ export function createMockBackend(): VoteBackend {
 
       // Every so often a new face enters the market.
       let name: string | undefined;
-      if (nextDemoVoter < DEMO_VOTERS.length && Math.random() < 0.4) {
+      if (nextDemoVoter < DEMO_VOTERS.length && Math.random() < 0.35) {
         name = DEMO_VOTERS[nextDemoVoter++];
         voters.push(name);
       }
 
-      subscribers.forEach((cb) => cb(poll.id, optionId, name));
+      // Attribute the drip to a rotating live demo voter so ballots fill up.
+      const fp = liveFps[liveIdx % liveFps.length];
+      liveIdx += 1;
+      let set = progress.get(fp);
+      if (!set) {
+        set = new Set();
+        progress.set(fp, set);
+      }
+      set.add(poll.id);
+
+      subscribers.forEach((cb) => cb(poll.id, optionId, name, fp));
       scheduleDrip();
     }, delay);
   }
@@ -145,15 +170,12 @@ export function createMockBackend(): VoteBackend {
   return {
     mode: 'demo',
 
-    async fetchCounts() {
+    async fetchSnapshot(): Promise<VoteSnapshot> {
       // Mimic a tiny bit of network latency for realistic loading states.
       await new Promise((r) => setTimeout(r, 280));
-      return deepCopy(counts);
-    },
-
-    async fetchVoters() {
-      await new Promise((r) => setTimeout(r, 280));
-      return [...voters];
+      const ballotProgress: Record<string, string[]> = {};
+      for (const [fp, set] of progress) ballotProgress[fp] = [...set];
+      return { counts: deepCopy(counts), voters: [...voters], ballotProgress };
     },
 
     async castVote(pollId, optionId, _fingerprint, voterName) {

@@ -38,12 +38,23 @@ export type CastResult = 'ok' | 'duplicate';
  * The contract every vote backend implements. Swapping Supabase for the mock
  * store (or anything else later) only requires implementing this interface.
  */
+/** One-shot snapshot of the whole board. */
+export interface VoteSnapshot {
+  /** pollId -> optionId -> number of votes. */
+  counts: VoteCounts;
+  /** Display names of everyone who has cast a ballot ("who's in the market"). */
+  voters: string[];
+  /**
+   * Voter fingerprint -> the poll ids that fingerprint has answered. Drives the
+   * "completed ballots" count (a ballot is complete when all markets are in).
+   */
+  ballotProgress: Record<string, string[]>;
+}
+
 export interface VoteBackend {
   readonly mode: DataMode;
-  /** Pull current totals for every option. */
-  fetchCounts(): Promise<VoteCounts>;
-  /** Display names of everyone who has cast a ballot ("who's in the market"). */
-  fetchVoters(): Promise<string[]>;
+  /** Pull a full snapshot of the board: counts, roster, and per-voter progress. */
+  fetchSnapshot(): Promise<VoteSnapshot>;
   /**
    * Record a vote. Resolves 'ok' when stored, 'duplicate' when the database
    * already has a vote from this fingerprint. Throws on real network errors.
@@ -58,10 +69,15 @@ export interface VoteBackend {
   /**
    * Subscribe to votes arriving from OTHER clients. Returns an unsubscribe
    * function. The callback fires once per incoming vote (with the voter's name
-   * when present) — a client's own votes are deduped so the UI can apply them
-   * optimistically without double-counting.
+   * and fingerprint when present) — a client's own votes are deduped so the UI
+   * can apply them optimistically without double-counting.
    */
   subscribe(
-    onVote: (pollId: string, optionId: string, voterName?: string) => void,
+    onVote: (
+      pollId: string,
+      optionId: string,
+      voterName?: string,
+      fingerprint?: string,
+    ) => void,
   ): () => void;
 }

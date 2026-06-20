@@ -15,11 +15,14 @@ import {
 } from '../lib/fingerprint';
 
 const POLL_IDS = MARKETS.map((m) => m.id);
+const MARKET_COUNT = POLL_IDS.length;
 
 export interface CastOutcome {
   result: CastResult;
   /** True when this was the device's very first vote (i.e. market entry). */
   firstEntry: boolean;
+  /** True when this vote completed the voter's full ballot (every market answered). */
+  ballotComplete: boolean;
   /** True when the voter dismissed the name prompt instead of voting. */
   cancelled?: boolean;
 }
@@ -29,7 +32,10 @@ export interface UseVotes {
   myVotes: MyVotes;
   loadState: LoadState;
   mode: DataMode;
+  /** Total individual answers across all markets. */
   totalVotes: number;
+  /** Number of voters who have answered every market (completed ballots). */
+  completedBallots: number;
   /** True once this device has cast at least one vote. */
   entered: boolean;
   /** Display names of everyone who has cast a ballot ("who's in the market"). */
@@ -41,9 +47,9 @@ export interface UseVotes {
 }
 
 /**
- * Single source of truth for vote state: initial load, realtime updates,
- * optimistic voting with rollback, per-device duplicate guards, and the live
- * roster of named voters.
+ * Single source of truth for vote state: initial snapshot, realtime updates,
+ * optimistic voting with rollback, per-device duplicate guards, the live roster
+ * of named voters, and the count of completed (all-markets-answered) ballots.
  */
 export function useVotes(): UseVotes {
   const backend = useMemo(() => getBackend(), []);
@@ -54,31 +60,71 @@ export function useVotes(): UseVotes {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [entered, setEntered] = useState<boolean>(() => hasEntered());
   const [voters, setVoters] = useState<string[]>([]);
+  const [completedBallots, setCompletedBallots] = useState(0);
   const [errorPollId, setErrorPollId] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
 
-  // Refs mirror state so async callbacks read fresh values without re-binding.
-  const countsRef = useRef(counts);
   const myVotesRef = useRef(myVotes);
-  countsRef.current = counts;
   myVotesRef.current = myVotes;
 
-  // Initial load + realtime subscription (re-runs on retry).
+  // fingerprint -> set of answered poll ids; powers the completed-ballots count.
+  const progressRef = useRef<Map<string, Set<string>>>(new Map());
+
+  const recomputeCompleted = useCallback(() => {
+    let n = 0;
+    for (const set of progressRef.current.values()) {
+      if (set.size >= MARKET_COUNT) n += 1;
+    }
+    setCompletedBallots(n);
+  }, []);
+
+  const registerVote = useCallback(
+    (fp: string | undefined, pollId: string) => {
+      if (!fp) return;
+      let set = progressRef.current.get(fp);
+      if (!set) {
+        set = new Set();
+        progressRef.current.set(fp, set);
+      }
+      if (!set.has(pollId)) {
+        set.add(pollId);
+        recomputeCompleted();
+      }
+    },
+    [recomputeCompleted],
+  );
+
+  const applyProgressSnapshot = useCallback(
+    (ballotProgress: Record<string, string[]>) => {
+      const map = new Map<string, Set<string>>();
+      for (const [fp, polls] of Object.entries(ballotProgress)) {
+        map.set(fp, new Set(polls));
+      }
+      progressRef.current = map;
+      recomputeCompleted();
+    },
+    [recomputeCompleted],
+  );
+
+  // Initial snapshot + realtime subscription (re-runs on retry).
   useEffect(() => {
     let cancelled = false;
     let unsubscribe = () => {};
 
     setLoadState('loading');
     backend
-      .fetchCounts()
-      .then((fresh) => {
+      .fetchSnapshot()
+      .then((snap) => {
         if (cancelled) return;
-        setCounts(fresh);
+        setCounts(snap.counts);
+        setVoters(snap.voters);
+        applyProgressSnapshot(snap.ballotProgress);
         setLoadState('ready');
         // Subscribe only after the baseline is in, so no votes are lost.
-        unsubscribe = backend.subscribe((pollId, optionId, voterName) => {
+        unsubscribe = backend.subscribe((pollId, optionId, voterName, fp) => {
           setCounts((cur) => bumpCount(cur, pollId, optionId));
           if (voterName) setVoters((cur) => mergeName(cur, voterName));
+          registerVote(fp, pollId);
         });
       })
       .catch((err) => {
@@ -88,46 +134,40 @@ export function useVotes(): UseVotes {
         setLoadState('error');
       });
 
-    // The roster loads alongside the board; a failure here is non-fatal.
-    backend
-      .fetchVoters()
-      .then((list) => {
-        if (!cancelled) setVoters(list);
-      })
-      .catch(() => {
-        /* roster is a nice-to-have — ignore */
-      });
-
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [backend, retryToken]);
+  }, [backend, retryToken, applyProgressSnapshot, registerVote]);
 
   const castVote = useCallback(
     async (pollId: string, optionId: string): Promise<CastOutcome> => {
       // Guard: this device already voted in this market.
       if (myVotesRef.current[pollId]) {
-        return { result: 'duplicate', firstEntry: false };
+        return { result: 'duplicate', firstEntry: false, ballotComplete: false };
       }
 
       const firstEntry = !hasEntered();
+      const willComplete = Object.keys(myVotesRef.current).length + 1 >= MARKET_COUNT;
       const voterName = getVoterName() ?? undefined;
+      const alreadyTracked = progressRef.current.get(fingerprint)?.has(pollId) ?? false;
 
       // ---- Optimistic update (instant thumb feedback) ----
       setErrorPollId((id) => (id === pollId ? null : id));
       setCounts((cur) => bumpCount(cur, pollId, optionId));
       setMyVotes((m) => ({ ...m, [pollId]: optionId }));
       rememberVote(pollId, optionId);
+      registerVote(fingerprint, pollId);
 
       try {
         const result = await backend.castVote(pollId, optionId, fingerprint, voterName);
 
         if (result === 'duplicate') {
-          // DB already had a vote from this fingerprint — resync to the truth
-          // (our optimistic +1 was likely an over-count).
-          const fresh = await backend.fetchCounts();
-          setCounts(fresh);
+          // DB already had a vote from this fingerprint — resync to the truth.
+          const snap = await backend.fetchSnapshot();
+          setCounts(snap.counts);
+          setVoters(snap.voters);
+          applyProgressSnapshot(snap.ballotProgress);
         }
 
         // Add ourselves to the roster (our own realtime echo is suppressed).
@@ -137,7 +177,7 @@ export function useVotes(): UseVotes {
           markEntered();
           setEntered(true);
         }
-        return { result, firstEntry };
+        return { result, firstEntry, ballotComplete: result === 'ok' && willComplete };
       } catch (err) {
         // ---- Roll back the optimistic changes so the user can retry ----
         // eslint-disable-next-line no-console
@@ -149,11 +189,15 @@ export function useVotes(): UseVotes {
           return next;
         });
         forgetVote(pollId);
+        if (!alreadyTracked) {
+          const set = progressRef.current.get(fingerprint);
+          if (set && set.delete(pollId)) recomputeCompleted();
+        }
         setErrorPollId(pollId);
         throw err;
       }
     },
-    [backend, fingerprint],
+    [backend, fingerprint, registerVote, applyProgressSnapshot, recomputeCompleted],
   );
 
   const retry = useCallback(() => setRetryToken((t) => t + 1), []);
@@ -166,6 +210,7 @@ export function useVotes(): UseVotes {
     loadState,
     mode: backend.mode,
     totalVotes,
+    completedBallots,
     entered,
     voters,
     errorPollId,

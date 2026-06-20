@@ -56,7 +56,8 @@ export function BallotReceipt({ open, onClose }: BallotReceiptProps) {
           Ballot Submitted
         </h2>
         <p className="mx-auto mt-3 max-w-xs text-sm text-cream/75">
-          Voter has entered the <span className="text-cream">Andrew Stephens First Date Futures Market</span>.
+          Your full ballot is in — all seven markets called on the{' '}
+          <span className="text-cream">Andrew Stephens First Date Futures Exchange</span>.
         </p>
 
         {/* Risk exposure readout */}

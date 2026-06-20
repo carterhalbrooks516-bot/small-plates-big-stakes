@@ -71,7 +71,7 @@ export function MarketCard({ poll, number, pollCounts, myVote, errored, onVote }
           </Pill>
         )}
         <span className="ml-auto font-cond text-xs tabular-nums text-cream-dim">
-          {total.toLocaleString()} {total === 1 ? 'ballot' : 'ballots'}
+          {total.toLocaleString()} {total === 1 ? 'vote' : 'votes'}
         </span>
       </div>
 

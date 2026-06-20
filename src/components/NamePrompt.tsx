@@ -87,7 +87,7 @@ export function NamePrompt({ open, onSubmit, onClose }: NamePromptProps) {
               text-navy-950 shadow-glow transition-transform active:scale-[0.98]
               disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
           >
-            Cast My Ballot
+            Cast My Pick
           </button>
         </form>
 

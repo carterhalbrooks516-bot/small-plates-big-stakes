@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { MARKETS } from './data/markets';
 import { useVotes, type CastOutcome } from './hooks/useVotes';
+import { computeMatchup } from './lib/odds';
 import { getVoterName, saveVoterName } from './lib/fingerprint';
 import { Hero } from './components/Hero';
 import { LiveTicker } from './components/LiveTicker';
@@ -12,8 +13,30 @@ import { VotersStrip } from './components/VotersStrip';
 import { EmergencyOverride } from './components/EmergencyOverride';
 import { Pill } from './components/Pill';
 
+/** A small labeled number used in the exchange status bar. */
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="font-cond text-[0.6rem] uppercase tracking-[0.18em] text-cream-dim">
+        {label}
+      </span>
+      <span className="font-display text-xl tabular-nums text-gold-light">
+        {value.toLocaleString()}
+      </span>
+    </span>
+  );
+}
+
 /** Slim "exchange status" bar shown under the ticker. */
-function ExchangeStatus({ total, demo }: { total: number; demo: boolean }) {
+function ExchangeStatus({
+  votes,
+  ballots,
+  demo,
+}: {
+  votes: number;
+  ballots: number;
+  demo: boolean;
+}) {
   return (
     <div className="glass-card flex flex-wrap items-center gap-x-2 gap-y-2 rounded-2xl px-3.5 py-3">
       <Pill variant="green" dot>
@@ -26,14 +49,40 @@ function ExchangeStatus({ total, demo }: { total: number; demo: boolean }) {
       ) : (
         <Pill variant="green">Live Data</Pill>
       )}
-      <div className="ml-auto flex items-baseline gap-1.5">
-        <span className="font-cond text-[0.6rem] uppercase tracking-[0.18em] text-cream-dim">
-          Ballots
-        </span>
-        <span className="font-display text-xl tabular-nums text-gold-light">
-          {total.toLocaleString()}
-        </span>
+      <div className="ml-auto flex items-baseline gap-3">
+        <Stat label="Votes" value={votes} />
+        <span className="h-4 w-px self-center bg-white/10" aria-hidden />
+        <Stat label="Ballots" value={ballots} />
       </div>
+    </div>
+  );
+}
+
+/** Per-device ballot completion nudge: answer every market to lock a ballot. */
+function BallotProgress({ answered, total }: { answered: number; total: number }) {
+  if (answered <= 0) return null;
+  const done = answered >= total;
+  const pct = Math.round((Math.min(answered, total) / total) * 100);
+  return (
+    <div className="glass-card flex items-center gap-3 rounded-2xl px-3.5 py-2.5">
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-black/40 ring-1 ring-inset ring-white/5">
+        <div
+          className={`h-full rounded-full ${
+            done ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gold-sheen'
+          }`}
+          style={{ width: `${pct}%`, transition: 'width 0.6s cubic-bezier(0.16, 1, 0.3, 1)' }}
+        />
+      </div>
+      <span className="shrink-0 font-cond text-[0.62rem] uppercase tracking-[0.16em]">
+        {done ? (
+          <span className="text-emerald-300">✓ Ballot locked · {total}/{total}</span>
+        ) : (
+          <span className="text-cream-dim">
+            Ballot {answered}/{total} ·{' '}
+            <span className="text-gold-light">finish to lock it in</span>
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -99,7 +148,8 @@ export default function App() {
   const doVote = useCallback(
     async (pollId: string, optionId: string): Promise<CastOutcome> => {
       const outcome = await votes.castVote(pollId, optionId);
-      if (outcome.firstEntry && outcome.result === 'ok') {
+      // The receipt prints when a voter completes their full ballot (all markets).
+      if (outcome.result === 'ok' && outcome.ballotComplete) {
         setReceiptOpen(true);
       }
       return outcome;
@@ -137,7 +187,7 @@ export default function App() {
         try {
           resolve(await doVote(pollId, optionId));
         } catch {
-          resolve({ result: 'duplicate', firstEntry: false, cancelled: true });
+          resolve({ result: 'duplicate', firstEntry: false, ballotComplete: false, cancelled: true });
         }
       })();
     },
@@ -149,7 +199,12 @@ export default function App() {
     const pending = pendingVote.current;
     pendingVote.current = null;
     // Resolve the deferred pick as a no-op so the market card re-enables.
-    pending?.resolve({ result: 'duplicate', firstEntry: false, cancelled: true });
+    pending?.resolve({
+      result: 'duplicate',
+      firstEntry: false,
+      ballotComplete: false,
+      cancelled: true,
+    });
   }, []);
 
   const closeReceipt = useCallback(() => {
@@ -163,11 +218,20 @@ export default function App() {
     });
   }, []);
 
+  // Live Linley/Andrew line, blended from every vote on the board.
+  const matchup = useMemo(() => computeMatchup(votes.counts), [votes.counts]);
+  const myAnswered = Object.keys(votes.myVotes).length;
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-5 sm:py-6">
-      <Hero />
+      <Hero matchup={matchup} />
       <LiveTicker />
-      <ExchangeStatus total={votes.totalVotes} demo={votes.mode === 'demo'} />
+      <ExchangeStatus
+        votes={votes.totalVotes}
+        ballots={votes.completedBallots}
+        demo={votes.mode === 'demo'}
+      />
+      <BallotProgress answered={myAnswered} total={MARKETS.length} />
       <VotersStrip voters={votes.voters} you={voterName} />
 
       <main id="live-board" className="flex scroll-mt-3 flex-col gap-4 sm:gap-5">
@@ -191,7 +255,11 @@ export default function App() {
       </main>
 
       {votes.loadState === 'ready' && (
-        <MarketSummary counts={votes.counts} totalVotes={votes.totalVotes} />
+        <MarketSummary
+          counts={votes.counts}
+          totalVotes={votes.totalVotes}
+          completedBallots={votes.completedBallots}
+        />
       )}
 
       <EmergencyOverride />

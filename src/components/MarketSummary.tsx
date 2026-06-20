@@ -6,9 +6,10 @@ import { Pill } from './Pill';
 interface MarketSummaryProps {
   counts: VoteCounts;
   totalVotes: number;
+  completedBallots: number;
 }
 
-export function MarketSummary({ counts, totalVotes }: MarketSummaryProps) {
+export function MarketSummary({ counts, totalVotes, completedBallots }: MarketSummaryProps) {
   return (
     <section className="glass-card overflow-hidden p-4 sm:p-6">
       <div className="flex items-center justify-between gap-3">
@@ -46,20 +47,30 @@ export function MarketSummary({ counts, totalVotes }: MarketSummaryProps) {
                 )}
               </div>
               <div className="mt-1.5 line-clamp-2 text-[0.95rem] font-semibold leading-snug text-cream">
-                {leader ? leader.option.label : 'Awaiting first ballots…'}
+                {leader ? leader.option.label : 'Awaiting first votes…'}
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="mt-5 flex items-center justify-between rounded-2xl border border-gold/20 bg-gradient-to-r from-burgundy/30 to-navy-800/60 px-4 py-3">
-        <span className="font-cond text-xs uppercase tracking-[0.2em] text-cream-dim">
-          Total Ballots Cast
-        </span>
-        <span className="font-display text-2xl tabular-nums text-gold-light sm:text-3xl">
-          {totalVotes.toLocaleString()}
-        </span>
+      <div className="mt-5 grid grid-cols-2 gap-2.5">
+        <div className="flex items-center justify-between rounded-2xl border border-gold/20 bg-gradient-to-r from-burgundy/30 to-navy-800/60 px-4 py-3">
+          <span className="font-cond text-xs uppercase tracking-[0.2em] text-cream-dim">
+            Votes Cast
+          </span>
+          <span className="font-display text-2xl tabular-nums text-gold-light sm:text-3xl">
+            {totalVotes.toLocaleString()}
+          </span>
+        </div>
+        <div className="flex items-center justify-between rounded-2xl border border-gold/20 bg-gradient-to-r from-navy-800/60 to-burgundy/30 px-4 py-3">
+          <span className="font-cond text-xs uppercase tracking-[0.2em] text-cream-dim">
+            Ballots In
+          </span>
+          <span className="font-display text-2xl tabular-nums text-gold-light sm:text-3xl">
+            {completedBallots.toLocaleString()}
+          </span>
+        </div>
       </div>
     </section>
   );
