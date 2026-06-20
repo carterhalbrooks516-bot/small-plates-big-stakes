@@ -1,11 +1,27 @@
-import { TICKER_HEADLINES } from '../data/tickers';
+import { useMemo } from 'react';
+import type { VoteCounts } from '../types';
+import type { MatchupLine } from '../lib/odds';
+import { buildTickerHeadlines } from '../lib/ticker';
 import { Pill } from './Pill';
 
-export function LiveTicker() {
+interface LiveTickerProps {
+  matchup: MatchupLine;
+  counts: VoteCounts;
+  totalVotes: number;
+  completedBallots: number;
+}
+
+export function LiveTicker({ matchup, counts, totalVotes, completedBallots }: LiveTickerProps) {
+  // Rebuild headlines from the live board so the ticker tracks the odds.
+  const headlines = useMemo(
+    () => buildTickerHeadlines(matchup, counts, totalVotes, completedBallots),
+    [matchup, counts, totalVotes, completedBallots],
+  );
+
   // Render the headline set twice so the -50% scroll loops seamlessly.
   const Row = () => (
     <div className="flex shrink-0 items-center">
-      {TICKER_HEADLINES.map((h, i) => (
+      {headlines.map((h, i) => (
         <div key={i} className="flex items-center whitespace-nowrap">
           <span className="font-cond text-xs font-bold uppercase tracking-[0.14em] text-gold-light">
             {h.tag}

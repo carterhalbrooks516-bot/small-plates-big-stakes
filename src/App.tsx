@@ -225,7 +225,12 @@ export default function App() {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-5 sm:py-6">
       <Hero matchup={matchup} />
-      <LiveTicker />
+      <LiveTicker
+        matchup={matchup}
+        counts={votes.counts}
+        totalVotes={votes.totalVotes}
+        completedBallots={votes.completedBallots}
+      />
       <ExchangeStatus
         votes={votes.totalVotes}
         ballots={votes.completedBallots}
